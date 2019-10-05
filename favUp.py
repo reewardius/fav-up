@@ -204,7 +204,7 @@ class FavUp(object):
     def parallelScan(self, doms, _type):
         i = 3
         loop = asyncio.get_event_loop()
-        tasks = [asyncio.ensure_future(self.fetch(doms[d], _type)) for d in range((i-1)*100,i*100)]
+        tasks = [asyncio.ensure_future(self.fetch(doms[d], _type)) for d in range((i-1)*50,i*50)]
         loop.run_until_complete(asyncio.wait(tasks))
         loop.close()
     
@@ -246,7 +246,8 @@ class FavUp(object):
             except SocksError:
                 print(f"[x] general error with: {dom}")
             except:
-                print(f"[x] timeout error for: {dom}")
+                #print(f"[x] timeout error for: {dom}")
+                pass
         elif _type == 'favicon':
             async with aiohttp.ClientSession(connector=connector, headers=ua) as session:
                 session = RateLimiter(session)
