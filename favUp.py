@@ -3,6 +3,10 @@ import base64
 import argparse
 import time
 
+import asyncio
+import aiohttp
+from aiohttp_socks import SocksConnector, SocksVer, errors
+from aiohttp_socks.errors import SocksError
 import tqdm
 import mmh3
 from ipwhois import IPWhois
@@ -11,6 +15,8 @@ from shodan import Shodan
 from shodan.cli.helpers import get_api_key
 from fake_useragent import UserAgent
 from fake_useragent.errors import FakeUserAgentError
+
+from rateLimiter import RateLimiter
 ua = UserAgent()
 
 class FavUp(object):
@@ -19,7 +25,8 @@ class FavUp(object):
         """
         self.show = None
         self._iterator = None
-
+        self.proxy = None
+        self.not_secure = False
         self.key = None
         self.keyFile = None
         self.shodanCLI = []
@@ -50,6 +57,10 @@ class FavUp(object):
                 help="Iterate over a file that contains the full URL of all the icons which you want to lookup.")
             ap.add_argument('-wl', '--web-list',
                 help="Iterate over a file that contains all the domains which you want to lookup.")
+            
+            ap.add_argument('-p', '--proxy',
+                help="Specify a proxy, format 'type://server:port'. You can type 'tor' as short.")
+            ap.add_argument('-ns', '--not-secure', help="Don't use HTTPS, use HTTP instead.", action="store_true")
 
 
             args = self._argsCheck(ap.parse_args())
@@ -62,6 +73,9 @@ class FavUp(object):
             self.fileList = self._serializeListFile(args.favicon_list) if args.favicon_list else []
             self.urlList = self._serializeListFile(args.url_list) if args.url_list else []
             self.webList = self._serializeListFile(args.web_list) if args.web_list else []
+            self.not_secure = 'http' if args.not_secure else 'https'
+            self.proxy = args.proxy if not args.proxy == 'tor' else 'socks5h://localhost:9050'
+            self.proxy = {'http': self.proxy}
 
             self.run()
     
@@ -110,51 +124,64 @@ class FavUp(object):
                     'file': fav,
                     '_origin': fav
                     })
-        if self.faviconURL or self.urlList:
-            self.urlList.extend(self.faviconURL)
-            for fav in self.urlList:
-                print(f"[+] getting data for: {fav}")
-                headers = {
-                        'User-Agent': self.get_user_agent(),
-                    }
-                data = requests.get(fav, stream=True, headers=headers)
-                _dcL = self.deepConnectionLens(data)
-                data = data.content
-                _fH = self.faviconHash(data)
-                self.faviconsList.append({
-                    'favhash': _fH,
-                    'url': self.faviconURL,
-                    'domain': fav,
-                    'maskIP': _dcL['mIP'],
-                    'maskISP': _dcL['mISP'],
-                    '_origin': fav
-                    })
+        #if self.faviconURL or self.urlList:
+        #    self.urlList.extend(self.faviconURL)
+        #    self.parallelScan(self.urlList, 'favicon')
         if self.web or self.webList:
             self.webList.extend(self.web)
-            for w in self.webList:
-                print(f"[+] getting data for: {w}")
-                try:
-                    headers = {
-                        'User-Agent': self.get_user_agent(),
-                    }
-                    data = requests.get(f"https://{w}", stream=True, headers=headers)
-                    _dcL = self.deepConnectionLens(data)
-                    data = self.searchFaviconHTML(f"https://{w}")
-                    if not isinstance(data, str):    
-                        _fH = self.faviconHash(data.content, web_source=True)
-                    else:
-                        _fH = "not-found"
-                except requests.exceptions.ConnectionError:
-                    print(f"[x] Connection refused by {w}.")
-                    if len(self.webList) == 1:
-                        exit(1)
-                self.faviconsList.append({
-                    'favhash': _fH,
-                    'domain': f"https://{w}",
-                    'maskIP': _dcL['mIP'],
-                    'maskISP': _dcL['mISP'],
-                    '_origin': w
-                    })
+            self.parallelScan(self.webList, 'web')
+        #if self.faviconURL or self.urlList:
+        #    self.urlList.extend(self.faviconURL)
+        #    for fav in self.urlList:
+        #        print(f"[+] getting data for: {fav}")
+        #        headers = {
+        #                'User-Agent': self.get_user_agent(),
+        #            }
+        #        data = requests.get(fav, stream=True, headers=headers, proxies=self.proxy)
+        #        if '.onion/' in fav:
+        #            _dcL = {'mIP': '', 'mISP': ''}
+        #        else:
+        #            _dcL = self.deepConnectionLens(data)
+        #        data = data.content
+        #        _fH = self.faviconHash(data)
+        #        self.faviconsList.append({
+        #            'favhash': _fH,
+        #            'url': self.faviconURL,
+        #            'domain': fav,
+        #            'maskIP': _dcL['mIP'],
+        #            'maskISP': _dcL['mISP'],
+        #            '_origin': fav
+        #            })
+        #if self.web or self.webList:
+        #    self.webList.extend(self.web)
+        #    for w in self.webList:
+        #        print(f"[+] getting data for: {w}")
+        #        try:
+        #            headers = {
+        #                'User-Agent': self.get_user_agent(),
+        #            }
+        #            data = requests.get(f"{self.not_secure}://{w}", stream=True, headers=headers, proxies=self.proxy)
+        #            if w.endswith('.onion'):
+        #                _dcL = {'mIP': '', 'mISP': ''}
+        #            else:
+        #                _dcL = self.deepConnectionLens(data)
+        #            data = self.searchFaviconHTML(f"{self.not_secure}://{w}")
+        #            if not isinstance(data, str):    
+        #                _fH = self.faviconHash(data.content, web_source=True)
+        #            else:
+        #                _fH = "not-found"
+        #        except requests.exceptions.ConnectionError:
+        #            print(f"[x] Connection refused by {w}.")
+        #            if len(self.webList) == 1:
+        #                exit(1)
+        #            continue
+        #        self.faviconsList.append({
+        #            'favhash': _fH,
+        #            'domain': f"{self.not_secure}://{w}",
+        #            'maskIP': _dcL['mIP'],
+        #            'maskISP': _dcL['mISP'],
+        #            '_origin': w
+        #            })
         _alreadyScanned = {}
         for _fObject in self.faviconsList:
             try:
@@ -174,6 +201,72 @@ class FavUp(object):
                 for _atr in _fObject:
                     print(f"--> {_atr:<10} :: {_fObject[_atr]}")
     
+    def parallelScan(self, doms, _type):
+        i = 3
+        loop = asyncio.get_event_loop()
+        tasks = [asyncio.ensure_future(self.fetch(doms[d], _type)) for d in range((i-1)*100,i*100)]
+        loop.run_until_complete(asyncio.wait(tasks))
+        loop.close()
+    
+    async def fetch(self, dom, _type):
+        ua = {'User-Agent': self.get_user_agent()}
+        timeout = aiohttp.ClientTimeout(total=1*60)
+        connector = None
+        if self.proxy['http'] == 'socks5h://localhost:9050':
+            connector = SocksConnector(
+                        socks_ver=SocksVer.SOCKS5,
+                        host='127.0.0.1',
+                        port=9050,
+                        rdns=True)
+        if _type == 'web':
+            print(f"[+] getting info for {dom}")
+            try:
+                async with aiohttp.ClientSession(connector=connector, headers=ua) as session:
+                    session = RateLimiter(session)
+                    async with await session.get(f"{self.not_secure}://{dom}", timeout=timeout) as response:
+                        if response.status == 200:
+                            if dom.endswith('.onion'):
+                                _dcL = {'mIP': '', 'mISP': ''}
+                            else:
+                                _dcL = self.deepConnectionLens(response)
+                            data = self.searchFaviconHTML(f"{self.not_secure}://{dom}")
+                            if not isinstance(data, str):    
+                                _fH = self.faviconHash(data.content, web_source=True)
+                            else:
+                                _fH = "not-found"
+                            await self.faviconsList.append({
+                                'favhash': _fH,
+                                'domain': f"{self.not_secure}://{dom}",
+                                'maskIP': _dcL['mIP'],
+                                'maskISP': _dcL['mISP'],
+                                '_origin': dom
+                            })
+            except aiohttp.client_exceptions.ClientConnectorError:
+                print(f'[x] connection error with: {dom}')
+            except SocksError:
+                print(f"[x] general error with: {dom}")
+            except:
+                print(f"[x] timeout error for: {dom}")
+        elif _type == 'favicon':
+            async with aiohttp.ClientSession(connector=connector, headers=ua) as session:
+                session = RateLimiter(session)
+                async with await session.get(f"{self.not_secure}://{dom}", timeout=timeout) as response:
+                    if response.status == 200:
+                        if '.onion/' in dom:
+                            _dcL = {'mIP': '', 'mISP': ''}
+                        else:
+                            _dcL = self.deepConnectionLens(response)
+                        data = response.content
+                        _fH = self.faviconHash(data)
+                        await self.faviconsList.append({
+                            'favhash': _fH,
+                            'url': self.faviconURL,
+                            'domain': fav,
+                            'maskIP': _dcL['mIP'],
+                            'maskISP': _dcL['mISP'],
+                            '_origin': fav
+                        })
+
     def faviconHash(self, data, web_source=None):
         if web_source:
             b64data = base64.encodebytes(data).decode()
@@ -182,7 +275,7 @@ class FavUp(object):
         return mmh3.hash(b64data)
 
     def searchFaviconHTML(self, link):
-        data = requests.get(link, stream=True)
+        data = requests.get(link, stream=True, proxies=self.proxy, headers={'User-Agent': self.get_user_agent()})
         soup = BeautifulSoup(data.content, 'html.parser')
         searchIcon = soup.find('link', rel='icon')
         if searchIcon:
