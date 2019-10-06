@@ -16,7 +16,6 @@ from shodan.cli.helpers import get_api_key
 from fake_useragent import UserAgent
 from fake_useragent.errors import FakeUserAgentError
 
-from rateLimiter import RateLimiter
 ua = UserAgent()
 
 class FavUp(object):
@@ -202,10 +201,12 @@ class FavUp(object):
                     print(f"--> {_atr:<10} :: {_fObject[_atr]}")
     
     def parallelScan(self, doms, _type):
-        i = 3
+        #i = 3
         loop = asyncio.get_event_loop()
-        tasks = [asyncio.ensure_future(self.fetch(doms[d], _type)) for d in range((i-1)*50,i*50)]
-        loop.run_until_complete(asyncio.wait(tasks))
+        for i in range(1,10):
+            print(f"[+++] starting set {i}")
+            tasks = [asyncio.ensure_future(self.fetch(doms[d], _type)) for d in range((i-1)*1000,i*1000)]
+            loop.run_until_complete(asyncio.wait(tasks))
         loop.close()
     
     async def fetch(self, dom, _type):
@@ -219,10 +220,9 @@ class FavUp(object):
                         port=9050,
                         rdns=True)
         if _type == 'web':
-            print(f"[+] getting info for {dom}")
+            #print(f"[+] getting info for {dom}")
             try:
                 async with aiohttp.ClientSession(connector=connector, headers=ua) as session:
-                    session = RateLimiter(session)
                     async with await session.get(f"{self.not_secure}://{dom}", timeout=timeout) as response:
                         if response.status == 200:
                             if dom.endswith('.onion'):
@@ -242,9 +242,11 @@ class FavUp(object):
                                 '_origin': dom
                             })
             except aiohttp.client_exceptions.ClientConnectorError:
-                print(f'[x] connection error with: {dom}')
+                #print(f'[x] connection error with: {dom}')
+                pass
             except SocksError:
-                print(f"[x] general error with: {dom}")
+                #print(f"[x] general error with: {dom}")
+                pass
             except:
                 #print(f"[x] timeout error for: {dom}")
                 pass
