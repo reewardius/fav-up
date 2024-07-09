@@ -6,3 +6,4 @@ requests>=2.22.0
 argparse
 tqdm>=4.32.0
 fake-useragent
+zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
